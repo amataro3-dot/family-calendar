@@ -65,7 +65,11 @@ export async function setupFamily(name, pw, color) {
   b.set(D.user(uid), { mid, role: "host" });
   b.set(D.login(key), { email });
   try { await b.commit(); }
-  catch (e) { try { await cred.user.delete(); } catch (x) { } throw new Error("already"); }
+  catch (e) {
+    // 作ったアカウントは消す(消せなければログアウトだけ)。もう家族があるか、ルールが貼られていない
+    try { await cred.user.delete(); } catch (x) { try { await signOut(auth); } catch (y) { } }
+    const err = new Error("setup-failed"); err.code = "setup-failed:" + (e?.code || e?.message || ""); throw err;
+  }
 }
 
 /* 自分(users/{uid})を読む。家族のメンバーでなければ null */

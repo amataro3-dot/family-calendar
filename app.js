@@ -1,8 +1,8 @@
-/* カレンダー(家族用) 画面(v=2)
+/* カレンダー(家族用) 画面(v=3)
    - ログイン → 月のカレンダー。日を押すとその日の予定。＋で予定を書く
    - 見せる相手: 大人は「家族みんな / 大人だけ / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
    - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で人を足す・パスワードを作り直す・外す */
-import * as F from "./fb.js?v=2";
+import * as F from "./fb.js?v=3";
 
 const COLORS = ["#e8664a", "#3b82c4", "#3a9d6a", "#d4a017", "#9b59b6", "#e05a9a", "#16a3a3", "#7a8a99"];
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
@@ -41,7 +41,7 @@ function errMsg(e) {
   if (/weak-password/.test(c)) return "パスワードは6文字以上にしてください";
   if (/too-many-requests/.test(c)) return "何回もまちがえたので、少し待ってからやり直してください";
   if (/network|unavailable/.test(c)) return "つながりません。電波のいい所でやり直してください";
-  if (/already/.test(c)) return "もう家族の設定がされています。ホストに名前とパスワードを作ってもらってください";
+  if (/setup-failed/.test(c)) return "設定できませんでした。もう家族の設定がされているか、Firebase にルールがまだ貼られていません(" + c.replace("setup-failed:", "") + ")";
   if (/same-name/.test(c)) return "同じ名前の人がもういます";
   if (/permission/.test(c)) return "この操作はできません";
   return "うまくいきませんでした(" + c + ")";
@@ -121,8 +121,12 @@ function showSetup() {
     e.preventDefault();
     if ($("sp").value !== $("sp2").value) { $("se").textContent = "パスワードが同じではありません"; return; }
     $("sb").disabled = true; $("se").textContent = "";
-    try { await F.setupFamily($("sn").value, $("sp").value, document.querySelector("input[name=sc]:checked").value); }
-    catch (x) { $("se").textContent = errMsg(x); $("sb").disabled = false; }
+    // 設定が終わるまで、ログインの見張りを待たせる(家族を書く前に「メンバーではない」と判断してしまうため)
+    setupBusy = true;
+    try {
+      await F.setupFamily($("sn").value, $("sp").value, document.querySelector("input[name=sc]:checked").value);
+      setupBusy = false; start(F.auth.currentUser);
+    } catch (x) { setupBusy = false; $("se").textContent = errMsg(x); $("sb").disabled = false; }
   };
 }
 
@@ -148,7 +152,9 @@ async function start(user) {
   S.stop.push(F.watchEvents(S.me.mid, list => { S.events = list; render(); }, onErr));
 }
 
+let setupBusy = false;
 F.watchAuth(user => {
+  if (setupBusy) return;
   closeSheet();
   if (user) start(user); else { S.me = null; showLogin(); }
 });
