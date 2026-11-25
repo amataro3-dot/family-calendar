@@ -1,0 +1,70 @@
+rules_version = '2';
+// 家族カレンダーのルール(Firebase → Firestore Database → ルール に貼って「公開」)
+// - logins/{名前の鍵}: ログインのとき名前 → にせのメールを引く表。1件ずつ読むだけ(一覧は不可)。書くのはホストだけ
+// - config/family:     家族の名前・大人/子ども・色。メンバーだけ読める。最初の1回だけ、作った人がホストになる
+// - users/{uid}:       ログインした人 → 家族の番号(mid)と大人/子ども。自分のだけ読める。書くのはホストだけ
+// - events/{id}:       予定。viewers(見せる人の番号)に自分がいる予定だけ読める。直す・消すは書いた本人だけ
+//                      子どもの予定は、家族全員に見せないと書けない
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function famPath() { return /databases/$(db)/documents/config/family; }
+    function userPath(uid) { return /databases/$(db)/documents/users/$(uid); }
+    function isMember() { return signedIn() && exists(userPath(request.auth.uid)); }
+    function me() { return get(userPath(request.auth.uid)).data; }
+    // 書いたあとの状態で「ホストか」(最初の設定は、家族とホストを一度に書くため)
+    function isHostAfter() { return signedIn() && existsAfter(famPath()) && getAfter(famPath()).data.hostUid == request.auth.uid; }
+    function isHost() { return signedIn() && exists(famPath()) && get(famPath()).data.hostUid == request.auth.uid; }
+
+    match /logins/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isHostAfter()
+        && (request.resource == null || request.resource.data.keys().hasOnly(['email']));
+    }
+
+    match /config/family {
+      allow read: if isMember();
+      // まだ家族がないときだけ作れる。作った人がホスト
+      allow create: if signedIn() && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['hostUid', 'members']);
+      allow update: if isHost() && request.resource.data.hostUid == resource.data.hostUid
+        && request.resource.data.keys().hasOnly(['hostUid', 'members']);
+      allow delete: if false;
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if false;
+      // 最初の設定: ホスト自身。そのあとは、ホストが家族の分を書く
+      allow create: if isHostAfter()
+        && request.resource.data.keys().hasOnly(['mid', 'role'])
+        && request.resource.data.role in ['host', 'adult', 'child']
+        && (request.resource.data.role != 'host' || uid == request.auth.uid);
+      allow update: if false;
+      allow delete: if isHost() && uid != request.auth.uid;
+    }
+
+    match /events/{id} {
+      function valid(d) {
+        return d.keys().hasOnly(['title', 'date', 'allDay', 'start', 'end', 'memo', 'author', 'vis', 'viewers', 'createdAt', 'updatedAt'])
+          && d.title is string && d.title.size() > 0 && d.title.size() <= 100
+          && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+          && d.allDay is bool
+          && d.start is string && d.start.size() <= 5
+          && d.end is string && d.end.size() <= 5
+          && d.memo is string && d.memo.size() <= 1000
+          && d.vis in ['all', 'adults', 'self', 'pick']
+          && d.viewers is list && d.viewers.size() >= 1 && d.viewers.size() <= 20
+          && d.author == me().mid
+          && me().mid in d.viewers
+          // 子どもは、家族全員に見せる予定だけ
+          && (me().role != 'child' || (d.vis == 'all' && d.viewers.hasAll(get(famPath()).data.members.keys())));
+      }
+      allow read: if isMember() && me().mid in resource.data.viewers;
+      allow create: if isMember() && valid(request.resource.data);
+      allow update: if isMember() && resource.data.author == me().mid && valid(request.resource.data);
+      allow delete: if isMember() && resource.data.author == me().mid;
+    }
+  }
+}
