@@ -1,8 +1,8 @@
-/* カレンダー(家族用) 画面(v=1)
+/* カレンダー(家族用) 画面(v=2)
    - ログイン → 月のカレンダー。日を押すとその日の予定。＋で予定を書く
    - 見せる相手: 大人は「家族みんな / 大人だけ / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
    - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で人を足す・パスワードを作り直す・外す */
-import * as F from "./fb.js?v=1";
+import * as F from "./fb.js?v=2";
 
 const COLORS = ["#e8664a", "#3b82c4", "#3a9d6a", "#d4a017", "#9b59b6", "#e05a9a", "#16a3a3", "#7a8a99"];
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
@@ -65,6 +65,17 @@ function closeSheet(fromPop) {
 }
 addEventListener("popstate", () => closeSheet(true));
 
+/* パスワードの欄と「見る」ボタン(押すと文字が見える・もう一度押すと隠す) */
+function pwBox(id, ac) {
+  return `<span class="pw"><input id="${id}" type="password" autocomplete="${ac}" minlength="${ac === "new-password" ? 6 : 1}" required><button type="button" class="eye" data-eye="${id}" aria-label="パスワードを見る">👁</button></span>`;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-eye]"); if (!b) return;
+  const i = $(b.dataset.eye), show = i.type === "password";
+  i.type = show ? "text" : "password";
+  b.classList.toggle("on", show); b.setAttribute("aria-label", show ? "パスワードを隠す" : "パスワードを見る");
+});
+
 /* ---------- ログインの画面 ---------- */
 function showLogin(msg) {
   stopWatch();
@@ -72,7 +83,7 @@ function showLogin(msg) {
 <h1>📅 カレンダー</h1>
 <form id="lf" class="card">
 <label>名前<input id="ln" autocomplete="username" required></label>
-<label>パスワード<input id="lp" type="password" autocomplete="current-password" required></label>
+<label>パスワード${pwBox("lp", "current-password")}</label>
 <button class="main" id="lb">ログイン</button>
 <p class="err" id="le">${esc(msg || "")}</p>
 </form>
@@ -97,8 +108,8 @@ function showSetup() {
 <form id="sf" class="card">
 <p class="small">あなたがホストになります。ほかの家族の名前とパスワードは、このあと「家族の設定」で作ります。</p>
 <label>あなたの名前<input id="sn" maxlength="12" required></label>
-<label>パスワード(6文字以上)<input id="sp" type="password" autocomplete="new-password" minlength="6" required></label>
-<label>もう一度<input id="sp2" type="password" autocomplete="new-password" minlength="6" required></label>
+<label>パスワード(6文字以上)${pwBox("sp", "new-password")}</label>
+<label>もう一度${pwBox("sp2", "new-password")}</label>
 <div class="lbl">あなたの色</div>${colorPick("sc", COLORS[0])}
 <button class="main" id="sb">作る</button>
 <p class="err" id="se"></p>
