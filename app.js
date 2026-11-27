@@ -1,10 +1,11 @@
-/* カレンダー(家族用) 画面(v=4)
+/* カレンダー(家族用) 画面(v=5)
    - ログイン → 月のカレンダー。日を押すとその日の予定。＋で予定を書く
    - 登録: ホストが「家族の設定」で名前・大人/子ども・色を用意 → 家族はログイン画面の「はじめて使う人」で自分の名前を押して、自分でパスワードを決める
-   - 見せる相手: 大人は「家族みんな / 大人だけ / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
+   - 見せる相手: 大人は「家族みんな / ほかの大人の名前(=大人だけ) / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
+     (v=5〜: 「大人だけ」と書かず、ほかの大人の名前を出す。えみの画面は「みつる」、みつるの画面は「えみ」)
    - 子どもの画面には、大人/子ども・見せる相手のしくみを一切出さない(欄・説明・見える人・しるし)
    - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で家族を用意する・パスワードをリセット・外す */
-import * as F from "./fb.js?v=4";
+import * as F from "./fb.js?v=5";
 
 const COLORS = ["#e8664a", "#3b82c4", "#3a9d6a", "#d4a017", "#9b59b6", "#e05a9a", "#16a3a3", "#7a8a99"];
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
@@ -33,6 +34,8 @@ const isAdult = role => role === "host" || role === "adult";
 const isHost = () => !!S.me && S.fam?.hostUid === S.me.uid;
 const myRole = () => mem(S.me?.mid)?.role;
 const isChild = () => myRole() === "child";
+/* 「大人だけ」のかわりに出す名前(自分以外の大人) */
+const adultsLabel = () => Object.entries(members()).filter(([id, m]) => id !== S.me?.mid && isAdult(m.role)).map(([, m]) => m.name).join("・") || "大人だけ";
 
 /* ---------- ちょっとした知らせ ---------- */
 let toastT;
@@ -216,7 +219,6 @@ const nameOf = mid => mem(mid)?.name || "(いない人)";
 
 function visLabel(e) {
   if (e.vis === "all" || isChild()) return "";   // 子どもには見せる相手のしるしを出さない
-  if (e.vis === "adults") return "👪 大人だけ";
   if (e.vis === "self") return "🔒 自分だけ";
   const others = (e.viewers || []).filter(v => v !== e.author).map(nameOf);
   return "👀 " + [nameOf(e.author), ...others].join("・");
@@ -291,7 +293,7 @@ function showEvent(e) {
   openSheet(`<h3><i class="dot" style="background:${colorOf(e.author)}"></i>${esc(e.title)}</h3>
 <p class="meta">${esc(dayLabel(e.date))} ${esc(timeLabel(e))}</p>
 ${e.memo ? `<p class="memo">${esc(e.memo)}</p>` : ""}
-<p class="meta">書いた人: ${esc(nameOf(e.author))}${isChild() ? "" : `<br>見える人: ${esc(e.vis === "all" ? "家族みんな" : e.vis === "adults" ? "大人だけ" : visLabel(e).replace(/^👀 /, ""))}`}</p>
+<p class="meta">書いた人: ${esc(nameOf(e.author))}${isChild() ? "" : `<br>見える人: ${esc(e.vis === "all" ? "家族みんな" : visLabel(e).replace(/^👀 /, ""))}`}</p>
 <p class="small">予定を直せるのは、書いた人だけです。</p>
 <div class="btns"><button class="sub" id="x">閉じる</button></div>`, () => { $("x").onclick = () => closeSheet(); });
 }
@@ -309,14 +311,14 @@ function editEvent(e) {
 <div class="row" id="etime"><label>はじまり<input id="es" type="time" step="300" value="${esc(v.start)}"></label><label>おわり<input id="ee" type="time" step="300" value="${esc(v.end)}"></label></div>
 <label>メモ<textarea id="em" maxlength="1000" rows="3">${esc(v.memo)}</textarea></label>
 ${child ? "" : `<div class="lbl">見せる相手</div>
-<div class="seg" id="ev">${Object.entries(VIS).map(([k, t]) => `<button type="button" data-v="${k}" class="${v.vis === k ? "on" : ""}">${t}</button>`).join("")}</div>
+<div class="seg" id="ev">${Object.entries(VIS).map(([k, t]) => `<button type="button" data-v="${k}" class="${v.vis === k ? "on" : ""}">${esc(k === "adults" ? adultsLabel() : t)}</button>`).join("")}</div>
 <div class="pick" id="ep" ${v.vis === "pick" ? "" : "hidden"}>${others.map(([id, m]) => `<label class="chk"><input type="checkbox" value="${id}" ${v.viewers.includes(id) ? "checked" : ""}><i class="dot" style="background:${m.color}"></i>${esc(m.name)}<small>${ROLE[m.role] || ""}</small></label>`).join("")}<p class="small">あなたにはいつも見えます。</p></div>
 <p class="small" id="evh"></p>`}
 <p class="err" id="ex"></p>
 <div class="btns">${e ? `<button type="button" class="del" id="edel">消す</button>` : ""}<button type="button" class="sub" id="ec">やめる</button><button class="main" id="eok">保存</button></div>
 </form>`, () => {
     let vis = child ? "all" : v.vis;
-    const hint = () => { if ($("evh")) $("evh").textContent = { all: "家族みんなに見えます", adults: "大人だけに見えます(子どもには見えません)", self: "あなただけに見えます", pick: "チェックした人とあなたに見えます" }[vis]; };
+    const hint = () => { if ($("evh")) $("evh").textContent = { all: "家族みんなに見えます", adults: adultsLabel() + "とあなたに見えます", self: "あなただけに見えます", pick: "チェックした人とあなたに見えます" }[vis]; };
     const timeOn = () => { $("etime").hidden = $("ea").checked; };
     $("ea").onchange = timeOn; timeOn(); hint();
     if (!child) $("ev").onclick = ev => {
