@@ -97,3 +97,8 @@ a{color:var(--ac)}
 .pw input{margin-top:0;padding-right:52px}
 .pw .eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:44px;height:40px;padding:0;background:transparent;font-size:20px;opacity:.45}
 .pw .eye.on{opacity:1}
+/* はじめて使う人(v=4) */
+.first{margin-top:14px}
+.names{display:flex;flex-wrap:wrap;gap:8px}
+.names button{flex:1 1 30%;padding:12px 8px;font-weight:700}
+.fam .wait{font-style:normal;font-size:12px;color:#b26a00;background:#fff4e0;border-radius:6px;padding:0 6px;margin-left:6px}

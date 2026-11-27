@@ -1,8 +1,10 @@
-/* カレンダー(家族用) 画面(v=3)
+/* カレンダー(家族用) 画面(v=4)
    - ログイン → 月のカレンダー。日を押すとその日の予定。＋で予定を書く
+   - 登録: ホストが「家族の設定」で名前・大人/子ども・色を用意 → 家族はログイン画面の「はじめて使う人」で自分の名前を押して、自分でパスワードを決める
    - 見せる相手: 大人は「家族みんな / 大人だけ / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
-   - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で人を足す・パスワードを作り直す・外す */
-import * as F from "./fb.js?v=3";
+   - 子どもの画面には、大人/子ども・見せる相手のしくみを一切出さない(欄・説明・見える人・しるし)
+   - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で家族を用意する・パスワードをリセット・外す */
+import * as F from "./fb.js?v=4";
 
 const COLORS = ["#e8664a", "#3b82c4", "#3a9d6a", "#d4a017", "#9b59b6", "#e05a9a", "#16a3a3", "#7a8a99"];
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
@@ -23,11 +25,14 @@ const S = {
   month: (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })(),
   sel: ymd(new Date()),
   stop: [],        // 見張りを止める関数
+  open: new Set(), // まだ登録していない人(家族の設定で使う)
 };
 const members = () => S.fam?.members || {};
 const mem = mid => members()[mid];
 const isAdult = role => role === "host" || role === "adult";
-const isHost = () => S.me?.role === "host";
+const isHost = () => !!S.me && S.fam?.hostUid === S.me.uid;
+const myRole = () => mem(S.me?.mid)?.role;
+const isChild = () => myRole() === "child";
 
 /* ---------- ちょっとした知らせ ---------- */
 let toastT;
@@ -41,6 +46,7 @@ function errMsg(e) {
   if (/weak-password/.test(c)) return "パスワードは6文字以上にしてください";
   if (/too-many-requests/.test(c)) return "何回もまちがえたので、少し待ってからやり直してください";
   if (/network|unavailable/.test(c)) return "つながりません。電波のいい所でやり直してください";
+  if (/claim-failed/.test(c)) return "登録できませんでした。もう一度やり直すか、ホストに聞いてください(" + c.replace("claim-failed:", "") + ")";
   if (/setup-failed/.test(c)) return "設定できませんでした。もう家族の設定がされているか、Firebase にルールがまだ貼られていません(" + c.replace("setup-failed:", "") + ")";
   if (/same-name/.test(c)) return "同じ名前の人がもういます";
   if (/permission/.test(c)) return "この操作はできません";
@@ -87,8 +93,19 @@ function showLogin(msg) {
 <button class="main" id="lb">ログイン</button>
 <p class="err" id="le">${esc(msg || "")}</p>
 </form>
-<p class="small"><a href="#" id="setup">はじめての設定(ホストになる)</a></p>
+<div class="card first" id="first" hidden><div class="lbl">はじめて使う人は、自分の名前を押してね</div><div class="names" id="names"></div></div>
+<p class="small" id="setupP" hidden><a href="#" id="setup">はじめての設定(ホストになる)</a></p>
 </div>`;
+  // まだ登録していない人の名前(ホストが用意した人)
+  S.stop.push(F.watchOpen(list => {
+    if (!$("names")) return;
+    list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+    $("first").hidden = !list.length;
+    $("names").innerHTML = list.map(o => `<button type="button" class="sub" data-mid="${esc(o.mid)}">${esc(o.name)}</button>`).join("");
+    $("names").querySelectorAll("[data-mid]").forEach(b => b.onclick = () => showClaim(b.dataset.mid, b.textContent));
+  }));
+  // 家族がまだないときだけ「はじめての設定」を出す
+  F.isReady().then(r => { if ($("setupP")) $("setupP").hidden = r; });
   $("lf").onsubmit = async e => {
     e.preventDefault();
     $("lb").disabled = true; $("le").textContent = "";
@@ -130,19 +147,48 @@ function showSetup() {
   };
 }
 
+/* 自分で登録する(はじめて使う人) */
+function showClaim(mid, name) {
+  stopWatch();
+  $("app").innerHTML = `<div class="login">
+<h1>📅 ${esc(name)}さん</h1>
+<form id="cf" class="card">
+<p class="small">パスワードを決めてね。次からは、名前とこのパスワードでログインします。</p>
+<label>パスワード(6文字以上)${pwBox("cp", "new-password")}</label>
+<label>もう一度${pwBox("cp2", "new-password")}</label>
+<button class="main" id="cb">登録</button>
+<p class="err" id="ce"></p>
+</form>
+<p class="small"><a href="#" id="back">← もどる</a></p>
+</div>`;
+  $("back").onclick = e => { e.preventDefault(); showLogin(); };
+  $("cf").onsubmit = async e => {
+    e.preventDefault();
+    if ($("cp").value !== $("cp2").value) { $("ce").textContent = "パスワードが同じではありません"; return; }
+    $("cb").disabled = true; $("ce").textContent = "";
+    setupBusy = true;   // 登録が終わるまで、ログインの見張りを待たせる
+    try { await F.claim(mid, $("cp").value); setupBusy = false; start(F.auth.currentUser); }
+    catch (x) { setupBusy = false; $("ce").textContent = errMsg(x); $("cb").disabled = false; }
+  };
+}
+
 /* ---------- ログインしたあと ---------- */
 function stopWatch() { S.stop.forEach(f => { try { f(); } catch (e) { } }); S.stop = []; }
 
 async function start(user) {
+  stopWatch();
   $("app").innerHTML = `<p class="loading">読みこみ中…</p>`;
   const me = await F.loadMe(user.uid);
   if (!me) { await F.logout(); showLogin("この家族のメンバーではありません。ホストに聞いてください"); return; }
-  S.me = { uid: user.uid, ...me };
+  S.me = { uid: user.uid, mid: me.mid };
+  let upgraded = false;
   S.fam = null; S.events = [];
   const onErr = e => { console.warn(e); toast(errMsg(e)); };
   S.stop.push(F.watchFamily(f => {
     S.fam = f;
     if (f && !f.members?.[S.me.mid]) { F.logout(); return; }   // 外された
+    // v=3 までに作ったホストは、いまの形にそろえる(1回だけ)
+    if (f && !upgraded && isHost()) { upgraded = true; F.upgradeHost(S.me.mid, f.members[S.me.mid]).catch(e => console.warn(e)); }
     render();
   }, e => {
     // 外された・パスワードを作り直された(前のアカウント)ときは、読めなくなるのでログアウト
@@ -150,6 +196,7 @@ async function start(user) {
     onErr(e);
   }));
   S.stop.push(F.watchEvents(S.me.mid, list => { S.events = list; render(); }, onErr));
+  S.stop.push(F.watchOpen(list => { S.open = new Set(list.map(o => o.mid)); }));
 }
 
 let setupBusy = false;
@@ -168,7 +215,7 @@ const colorOf = mid => mem(mid)?.color || "#aaa";
 const nameOf = mid => mem(mid)?.name || "(いない人)";
 
 function visLabel(e) {
-  if (e.vis === "all") return "";
+  if (e.vis === "all" || isChild()) return "";   // 子どもには見せる相手のしるしを出さない
   if (e.vis === "adults") return "👪 大人だけ";
   if (e.vis === "self") return "🔒 自分だけ";
   const others = (e.viewers || []).filter(v => v !== e.author).map(nameOf);
@@ -244,14 +291,14 @@ function showEvent(e) {
   openSheet(`<h3><i class="dot" style="background:${colorOf(e.author)}"></i>${esc(e.title)}</h3>
 <p class="meta">${esc(dayLabel(e.date))} ${esc(timeLabel(e))}</p>
 ${e.memo ? `<p class="memo">${esc(e.memo)}</p>` : ""}
-<p class="meta">書いた人: ${esc(nameOf(e.author))}<br>見える人: ${esc(e.vis === "all" ? "家族みんな" : e.vis === "adults" ? "大人だけ" : visLabel(e).replace(/^👀 /, ""))}</p>
+<p class="meta">書いた人: ${esc(nameOf(e.author))}${isChild() ? "" : `<br>見える人: ${esc(e.vis === "all" ? "家族みんな" : e.vis === "adults" ? "大人だけ" : visLabel(e).replace(/^👀 /, ""))}`}</p>
 <p class="small">予定を直せるのは、書いた人だけです。</p>
 <div class="btns"><button class="sub" id="x">閉じる</button></div>`, () => { $("x").onclick = () => closeSheet(); });
 }
 
 /* ---------- 予定を書く・直す ---------- */
 function editEvent(e) {
-  const child = !isAdult(S.me.role);
+  const child = isChild();
   const v = e || { title: "", date: S.sel, allDay: false, start: "", end: "", memo: "", vis: "all", viewers: [] };
   const others = Object.entries(members()).filter(([id]) => id !== S.me.mid);
   openSheet(`<h3>${e ? "予定を直す" : "予定を書く"}</h3>
@@ -261,8 +308,7 @@ function editEvent(e) {
 <label class="chk"><input type="checkbox" id="ea" ${v.allDay ? "checked" : ""}> 終日</label>
 <div class="row" id="etime"><label>はじまり<input id="es" type="time" step="300" value="${esc(v.start)}"></label><label>おわり<input id="ee" type="time" step="300" value="${esc(v.end)}"></label></div>
 <label>メモ<textarea id="em" maxlength="1000" rows="3">${esc(v.memo)}</textarea></label>
-<div class="lbl">見せる相手</div>
-${child ? `<p class="small">子どもの予定は、家族みんなに見えます。</p>` : `
+${child ? "" : `<div class="lbl">見せる相手</div>
 <div class="seg" id="ev">${Object.entries(VIS).map(([k, t]) => `<button type="button" data-v="${k}" class="${v.vis === k ? "on" : ""}">${t}</button>`).join("")}</div>
 <div class="pick" id="ep" ${v.vis === "pick" ? "" : "hidden"}>${others.map(([id, m]) => `<label class="chk"><input type="checkbox" value="${id}" ${v.viewers.includes(id) ? "checked" : ""}><i class="dot" style="background:${m.color}"></i>${esc(m.name)}<small>${ROLE[m.role] || ""}</small></label>`).join("")}<p class="small">あなたにはいつも見えます。</p></div>
 <p class="small" id="evh"></p>`}
@@ -313,7 +359,7 @@ ${child ? `<p class="small">子どもの予定は、家族みんなに見えま�
 /* ---------- メニュー(名前を押したとき) ---------- */
 function showMenu() {
   const m = mem(S.me.mid) || {};
-  openSheet(`<h3><i class="dot" style="background:${m.color}"></i>${esc(m.name)} <small>${ROLE[S.me.role] || ""}</small></h3>
+  openSheet(`<h3><i class="dot" style="background:${m.color}"></i>${esc(m.name)} ${isHost() ? "<small>ホスト</small>" : ""}</h3>
 <div class="menu">
 ${isHost() ? `<button class="sub" id="mf">👪 家族の設定</button>` : ""}
 <button class="sub" id="mc">🎨 自分の色をかえる</button>
@@ -335,20 +381,21 @@ ${isHost() ? `<button class="sub" id="mf">👪 家族の設定</button>` : ""}
 
 /* ---------- 家族の設定(ホストだけ) ---------- */
 function showFamily() {
-  const list = Object.entries(members()).sort((a, b) => ({ host: 0, adult: 1, child: 2 }[a[1].role] - { host: 0, adult: 1, child: 2 }[b[1].role]));
+  const order = { host: 0, adult: 1, child: 2 };
+  const list = Object.entries(members()).sort((a, b) => order[a[1].role] - order[b[1].role]);
   const used = new Set(list.map(([, m]) => m.color));
   const free = COLORS.find(c => !used.has(c)) || COLORS[0];
   openSheet(`<h3>👪 家族の設定</h3>
 <ul class="fam">${list.map(([id, m]) => `<li><i class="dot" style="background:${m.color}"></i><b>${esc(m.name)}</b><small>${ROLE[m.role]}</small>
-${m.role === "host" ? "" : `<span class="fb"><button class="mini" data-r="${id}">パスワードを作り直す</button><button class="mini del" data-x="${id}">外す</button></span>`}</li>`).join("")}</ul>
+${S.open.has(id) ? `<em class="wait">まだ登録していません</em>` : ""}
+${m.role === "host" ? "" : `<span class="fb">${S.open.has(id) ? "" : `<button class="mini" data-r="${id}">パスワードをリセット</button>`}<button class="mini del" data-x="${id}">外す</button></span>`}</li>`).join("")}</ul>
 <form id="af" class="card">
 <div class="lbl">家族を足す</div>
 <label>名前<input id="an" maxlength="12" required></label>
 <div class="seg" id="ar"><button type="button" data-v="adult" class="on">大人</button><button type="button" data-v="child">子ども</button></div>
-<label>最初のパスワード(6文字以上)<input id="ap" minlength="6" required autocomplete="off"></label>
 <div class="lbl">色</div>${colorPick("ac", free)}
 <button class="main" id="ab">足す</button>
-<p class="small">名前とパスワードを、その人に伝えてください。</p>
+<p class="small">足した人は、ログイン画面の「はじめて使う人」に名前が出ます。そこから自分でパスワードを決めて登録します。</p>
 </form>
 <p class="err" id="fe"></p>
 <div class="btns"><button class="sub" id="fx">閉じる</button></div>`, sh => {
@@ -359,29 +406,19 @@ ${m.role === "host" ? "" : `<span class="fb"><button class="mini" data-r="${id}"
       e.preventDefault(); $("ab").disabled = true; $("fe").textContent = "";
       try {
         const name = $("an").value.trim();
-        await F.addMember(name, role, document.querySelector("input[name=ac]:checked").value, $("ap").value);
-        toast(`${name}さんを足しました`); showFamily();
+        await F.addMember(name, role, document.querySelector("input[name=ac]:checked").value);
+        toast(`${name}さんを足しました`); setTimeout(showFamily, 300);
       } catch (x) { $("fe").textContent = errMsg(x); $("ab").disabled = false; }
     };
-    sh.querySelectorAll("[data-r]").forEach(b => b.onclick = () => {
+    sh.querySelectorAll("[data-r]").forEach(b => b.onclick = async () => {
       const id = b.dataset.r, m = mem(id);
-      openSheet(`<h3>${esc(m.name)}さんのパスワード</h3>
-<form id="rf"><label>新しいパスワード(6文字以上)<input id="rp" minlength="6" required autocomplete="off"></label>
-<p class="small">前のパスワードは使えなくなります。予定はそのまま残ります。</p>
-<p class="err" id="re"></p>
-<div class="btns"><button type="button" class="sub" id="rx">やめる</button><button class="main" id="rok">作り直す</button></div></form>`, () => {
-        $("rx").onclick = showFamily;
-        $("rf").onsubmit = async e => {
-          e.preventDefault(); $("rok").disabled = true;
-          try { await F.resetPassword(id, m, $("rp").value); toast("作り直しました"); showFamily(); }
-          catch (x) { $("re").textContent = errMsg(x); $("rok").disabled = false; }
-        };
-      });
+      if (!confirm(`${m.name}さんのパスワードをリセットしますか？\n(前のパスワードは使えなくなります。ログイン画面の「はじめて使う人」から、もう一度登録してもらいます。予定はそのまま残ります)`)) return;
+      try { await F.resetMember(id, m); toast("リセットしました"); setTimeout(showFamily, 300); } catch (x) { $("fe").textContent = errMsg(x); }
     });
     sh.querySelectorAll("[data-x]").forEach(b => b.onclick = async () => {
       const id = b.dataset.x, m = mem(id);
       if (!confirm(`${m.name}さんを家族から外しますか？\n(${m.name}さんはログインできなくなります。書いた予定は残ります)`)) return;
-      try { await F.removeMember(id, m); toast("外しました"); showFamily(); } catch (x) { $("fe").textContent = errMsg(x); }
+      try { await F.removeMember(id, m); toast("外しました"); setTimeout(showFamily, 300); } catch (x) { $("fe").textContent = errMsg(x); }
     });
   });
 }

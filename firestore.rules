@@ -1,26 +1,31 @@
 rules_version = '2';
-// 家族カレンダーのルール(Firebase → Firestore Database → ルール に貼って「公開」)
-// - logins/{名前の鍵}: ログインのとき名前 → にせのメールを引く表。1件ずつ読むだけ(一覧は不可)。書くのはホストだけ
-// - config/family:     家族の名前・大人/子ども・色。メンバーだけ読める。最初の1回だけ、作った人がホストになる
-// - users/{uid}:       ログインした人 → 家族の番号(mid)と大人/子ども。自分のだけ読める。書くのはホストだけ
-// - events/{id}:       予定。viewers(見せる人の番号)に自分がいる予定だけ読める。直す・消すは書いた本人だけ
-//                      子どもの予定は、家族全員に見せないと書けない
+// カレンダー(家族用)のルール v=4(Firebase → Firestore Database → ルール に貼って「公開」)
+// - config/family: 家族の名前・大人/子ども・色。メンバーだけ読める。最初の1回だけ、作った人がホストになる
+// - config/public: { ready }。家族がもうあるか。だれでも読める
+// - users/{uid}:   ログインした人 → 家族の番号(mid)。自分のだけ読める
+// - keys/{名前の鍵}: ログインのとき名前 → 家族の番号。1件ずつ読むだけ。書くのはホストだけ
+// - logins/{mid}:  家族の番号 → ログイン用のメール。1件ずつ読むだけ
+// - links/{mid}:   家族の番号 → アカウント。ホストだけ読める
+// - open/{mid}:    まだ登録していない人の名前。だれでも読める(ログイン画面の「はじめて使う人」)
+//                  その人が自分で登録すると消える(自分の名前のぶんだけ登録できる)
+// - events/{id}:   予定。viewers(見せる人の番号)に自分がいる予定だけ読める。直す・消すは書いた本人だけ
+//                  子どもの予定は、家族全員に見せないと書けない
 service cloud.firestore {
   match /databases/{db}/documents {
     function signedIn() { return request.auth != null; }
     function famPath() { return /databases/$(db)/documents/config/family; }
     function userPath(uid) { return /databases/$(db)/documents/users/$(uid); }
+    function openPath(mid) { return /databases/$(db)/documents/open/$(mid); }
     function isMember() { return signedIn() && exists(userPath(request.auth.uid)); }
     function me() { return get(userPath(request.auth.uid)).data; }
+    function myRole() { return get(famPath()).data.members[me().mid].role; }
     // 書いたあとの状態で「ホストか」(最初の設定は、家族とホストを一度に書くため)
     function isHostAfter() { return signedIn() && existsAfter(famPath()) && getAfter(famPath()).data.hostUid == request.auth.uid; }
     function isHost() { return signedIn() && exists(famPath()) && get(famPath()).data.hostUid == request.auth.uid; }
-
-    match /logins/{key} {
-      allow get: if true;
-      allow list: if false;
-      allow create, update, delete: if isHostAfter()
-        && (request.resource == null || request.resource.data.keys().hasOnly(['email']));
+    // いま自分で登録している人(この書きこみで users/{自分} を作り、その番号が mid で、mid がまだ登録前)
+    function isClaimer(mid) {
+      return signedIn() && exists(openPath(mid)) && !exists(userPath(request.auth.uid))
+        && existsAfter(userPath(request.auth.uid)) && getAfter(userPath(request.auth.uid)).data.mid == mid;
     }
 
     match /config/family {
@@ -33,16 +38,55 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /config/public {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isHostAfter() && request.resource.data.keys().hasOnly(['ready']);
+      allow update, delete: if false;
+    }
+
     match /users/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list: if false;
-      // 最初の設定: ホスト自身。そのあとは、ホストが家族の分を書く
-      allow create: if isHostAfter()
-        && request.resource.data.keys().hasOnly(['mid', 'role'])
-        && request.resource.data.role in ['host', 'adult', 'child']
-        && (request.resource.data.role != 'host' || uid == request.auth.uid);
+      allow create: if signedIn() && uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['mid'])
+        && (
+          // はじめての設定: ホスト自身(家族を同じ書きこみで作る)
+          (!exists(famPath()) && isHostAfter())
+          // 自分で登録: 用意された番号(open にある、ホストではない)を、open を消しながら使う
+          || (exists(openPath(request.resource.data.mid)) && !existsAfter(openPath(request.resource.data.mid))
+              && get(famPath()).data.members[request.resource.data.mid].role in ['adult', 'child'])
+        );
       allow update: if false;
       allow delete: if isHost() && uid != request.auth.uid;
+    }
+
+    match /keys/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isHostAfter() && request.resource.data.keys().hasOnly(['mid']);
+      allow delete: if isHost();
+    }
+
+    match /logins/{mid} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if request.resource.data.keys().hasOnly(['email']) && (isHostAfter() || isClaimer(mid));
+      allow delete: if isHost();
+    }
+
+    match /links/{mid} {
+      allow get: if isHost();
+      allow list: if false;
+      allow create, update: if request.resource.data.keys().hasOnly(['uid'])
+        && ((isHostAfter() && request.resource.data.uid == request.auth.uid) || (isClaimer(mid) && request.resource.data.uid == request.auth.uid));
+      allow delete: if isHost();
+    }
+
+    match /open/{mid} {
+      allow read: if true;
+      allow create, update: if isHost() && request.resource.data.keys().hasOnly(['name']);
+      allow delete: if isHost() || isClaimer(mid);
     }
 
     match /events/{id} {
@@ -59,7 +103,7 @@ service cloud.firestore {
           && d.author == me().mid
           && me().mid in d.viewers
           // 子どもは、家族全員に見せる予定だけ
-          && (me().role != 'child' || (d.vis == 'all' && d.viewers.hasAll(get(famPath()).data.members.keys())));
+          && (myRole() != 'child' || (d.vis == 'all' && d.viewers.hasAll(get(famPath()).data.members.keys())));
       }
       allow read: if isMember() && me().mid in resource.data.viewers;
       allow create: if isMember() && valid(request.resource.data);
