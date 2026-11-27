@@ -1,11 +1,12 @@
-/* カレンダー(家族用) 画面(v=5)
+/* カレンダー(家族用) 画面(v=6)
    - ログイン → 月のカレンダー。日を押すとその日の予定。＋で予定を書く
    - 登録: ホストが「家族の設定」で名前・大人/子ども・色を用意 → 家族はログイン画面の「はじめて使う人」で自分の名前を押して、自分でパスワードを決める
    - 見せる相手: 大人は「家族みんな / ほかの大人の名前(=大人だけ) / 自分だけ / えらぶ」。子どもの予定はいつも家族みんな
      (v=5〜: 「大人だけ」と書かず、ほかの大人の名前を出す。えみの画面は「みつる」、みつるの画面は「えみ」)
+   - タグ(v=6〜): 一人ひとりが「バイト」「塾」などを作っておく。日を押して、その日の上のタグを押すと、すぐ予定に入る
    - 子どもの画面には、大人/子ども・見せる相手のしくみを一切出さない(欄・説明・見える人・しるし)
    - 直す・消すは、書いた本人だけ。ホストは「家族の設定」で家族を用意する・パスワードをリセット・外す */
-import * as F from "./fb.js?v=5";
+import * as F from "./fb.js?v=6";
 
 const COLORS = ["#e8664a", "#3b82c4", "#3a9d6a", "#d4a017", "#9b59b6", "#e05a9a", "#16a3a3", "#7a8a99"];
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
@@ -27,6 +28,7 @@ const S = {
   sel: ymd(new Date()),
   stop: [],        // 見張りを止める関数
   open: new Set(), // まだ登録していない人(家族の設定で使う)
+  tags: [],        // 自分のタグ
 };
 const members = () => S.fam?.members || {};
 const mem = mid => members()[mid];
@@ -200,6 +202,7 @@ async function start(user) {
   }));
   S.stop.push(F.watchEvents(S.me.mid, list => { S.events = list; render(); }, onErr));
   S.stop.push(F.watchOpen(list => { S.open = new Set(list.map(o => o.mid)); }));
+  S.stop.push(F.watchTags(S.me.mid, list => { S.tags = list; render(); }));
 }
 
 let setupBusy = false;
@@ -222,6 +225,17 @@ function visLabel(e) {
   if (e.vis === "self") return "🔒 自分だけ";
   const others = (e.viewers || []).filter(v => v !== e.author).map(nameOf);
   return "👀 " + [nameOf(e.author), ...others].join("・");
+}
+/* 見せる相手 → 見せる人の番号(子どもはいつも家族みんな) */
+function viewersFor(vis, picks) {
+  const all = Object.keys(members());
+  if (isChild()) vis = "all";
+  let v;
+  if (vis === "all") v = all;
+  else if (vis === "adults") v = all.filter(id => isAdult(mem(id).role));
+  else if (vis === "self") v = [S.me.mid];
+  else v = [S.me.mid, ...(picks || []).filter(id => mem(id))];
+  return [...new Set([S.me.mid, ...v])];
 }
 const timeLabel = e => e.allDay ? "終日" : (e.start || "") + (e.end ? "〜" + e.end : "");
 
@@ -252,6 +266,7 @@ function render() {
 <div class="grid" id="grid">${cells}</div>
 <section class="day">
  <h2>${dayLabel(S.sel)}</h2>
+ <div class="tags">${S.tags.map((t, i) => `<button class="tag" data-tag="${i}">🏷 ${esc(t.name)}${t.allDay ? "" : `<small>${esc(t.start)}${t.end ? "〜" + esc(t.end) : ""}</small>`}</button>`).join("")}<button class="tag new" id="tagset">${S.tags.length ? "＋" : "🏷 タグを作る"}</button></div>
  ${list.length ? `<ul class="evs">${list.map(e => `<li data-id="${e.id}" style="--c:${colorOf(e.author)}">
   <span class="t">${esc(timeLabel(e))}</span>
   <span class="ti">${esc(e.title)}</span>
@@ -274,6 +289,8 @@ function render() {
   });
   $("add").onclick = () => editEvent(null);
   $("who").onclick = showMenu;
+  $("tagset").onclick = showTags;
+  document.querySelectorAll("[data-tag]").forEach(b => b.onclick = () => quickAdd(S.tags[+b.dataset.tag], b));
   swipe($("grid"));
 }
 
@@ -334,13 +351,7 @@ ${child ? "" : `<div class="lbl">見せる相手</div>
     };
     $("ef").onsubmit = async ev => {
       ev.preventDefault();
-      const all = Object.keys(members());
-      let viewers;
-      if (vis === "all") viewers = all;
-      else if (vis === "adults") viewers = all.filter(id => isAdult(mem(id).role));
-      else if (vis === "self") viewers = [S.me.mid];
-      else viewers = [S.me.mid, ...[...$("ep").querySelectorAll("input:checked")].map(x => x.value)];
-      viewers = [...new Set([S.me.mid, ...viewers])];
+      const viewers = viewersFor(vis, vis === "pick" ? [...$("ep").querySelectorAll("input:checked")].map(x => x.value) : []);
       if (vis === "pick" && viewers.length === 1) { $("ex").textContent = "見せる人を1人以上えらんでください(自分だけなら「自分だけ」)"; return; }
       const allDay = $("ea").checked;
       const start = allDay ? "" : $("es").value, end = allDay ? "" : $("ee").value;
@@ -364,11 +375,13 @@ function showMenu() {
   openSheet(`<h3><i class="dot" style="background:${m.color}"></i>${esc(m.name)} ${isHost() ? "<small>ホスト</small>" : ""}</h3>
 <div class="menu">
 ${isHost() ? `<button class="sub" id="mf">👪 家族の設定</button>` : ""}
+<button class="sub" id="mt">🏷 タグ</button>
 <button class="sub" id="mc">🎨 自分の色をかえる</button>
 <button class="sub" id="mo">ログアウト</button>
 <button class="sub" id="mx">閉じる</button>
 </div>`, () => {
     if (isHost()) $("mf").onclick = showFamily;
+    $("mt").onclick = showTags;
     $("mc").onclick = () => openSheet(`<h3>自分の色</h3>${colorPick("mc2", m.color)}<p class="err" id="ce"></p><div class="btns"><button class="sub" id="cx">やめる</button><button class="main" id="cok">決める</button></div>`, () => {
       $("cx").onclick = () => closeSheet();
       $("cok").onclick = async () => {
@@ -422,5 +435,89 @@ ${m.role === "host" ? "" : `<span class="fb">${S.open.has(id) ? "" : `<button cl
       if (!confirm(`${m.name}さんを家族から外しますか？\n(${m.name}さんはログインできなくなります。書いた予定は残ります)`)) return;
       try { await F.removeMember(id, m); toast("外しました"); setTimeout(showFamily, 300); } catch (x) { $("fe").textContent = errMsg(x); }
     });
+  });
+}
+
+/* ---------- タグ ---------- */
+/* タグを押したら、えらんでいる日にすぐ入れる */
+async function quickAdd(t, btn) {
+  if (!t) return;
+  if (btn) btn.disabled = true;
+  const vis = isChild() ? "all" : (t.vis || "all");
+  const data = { title: t.name, date: S.sel, allDay: !!t.allDay, start: t.allDay ? "" : (t.start || ""), end: t.allDay ? "" : (t.end || ""),
+    memo: "", author: S.me.mid, vis, viewers: viewersFor(vis, t.picks) };
+  if (vis === "pick" && data.viewers.length === 1) { data.vis = "self"; }
+  try { await F.addEvent(data); toast(`${dayLabel(S.sel)}に「${t.name}」を入れました`); }
+  catch (x) { toast(errMsg(x)); if (btn) btn.disabled = false; }
+}
+
+const tagTime = t => t.allDay ? "終日" : (t.start || "") + (t.end ? "〜" + t.end : "");
+function tagVis(t) {
+  if (isChild() || !t.vis || t.vis === "all") return "";
+  if (t.vis === "adults") return adultsLabel();
+  if (t.vis === "self") return "自分だけ";
+  return (t.picks || []).map(nameOf).join("・");
+}
+
+function showTags() {
+  openSheet(`<h3>🏷 タグ</h3>
+<p class="small">よく入れる予定を、タグにしておけます。日を押して、その日の上のタグを押すと、すぐ予定に入ります。</p>
+${S.tags.length ? `<ul class="fam">${S.tags.map((t, i) => `<li><b>${esc(t.name)}</b><small>${esc(tagTime(t))}${tagVis(t) ? "・" + esc(tagVis(t)) : ""}</small>
+<span class="fb"><button class="mini" data-te="${i}">直す</button><button class="mini del" data-td="${i}">消す</button></span></li>`).join("")}</ul>` : `<p class="empty">まだタグがありません</p>`}
+<p class="err" id="te"></p>
+<div class="btns"><button class="sub" id="tx">閉じる</button><button class="main" id="tn">＋ タグを作る</button></div>`, sh => {
+    $("tx").onclick = () => closeSheet();
+    $("tn").onclick = () => editTag(-1);
+    sh.querySelectorAll("[data-te]").forEach(b => b.onclick = () => editTag(+b.dataset.te));
+    sh.querySelectorAll("[data-td]").forEach(b => b.onclick = async () => {
+      const t = S.tags[+b.dataset.td];
+      if (!confirm(`タグ「${t.name}」を消しますか？\n(入れた予定は消えません)`)) return;
+      try { await F.saveTags(S.me.mid, S.tags.filter((_, j) => j !== +b.dataset.td)); setTimeout(showTags, 200); }
+      catch (x) { $("te").textContent = errMsg(x); }
+    });
+  });
+}
+
+function editTag(i) {
+  const child = isChild();
+  const t = i >= 0 ? S.tags[i] : { name: "", allDay: false, start: "", end: "", vis: "all", picks: [] };
+  const others = Object.entries(members()).filter(([id]) => id !== S.me.mid);
+  openSheet(`<h3>${i >= 0 ? "タグを直す" : "タグを作る"}</h3>
+<form id="gf">
+<label>名前(予定のタイトルになります)<input id="gn" maxlength="30" required value="${esc(t.name)}" placeholder="例: バイト"></label>
+<label class="chk"><input type="checkbox" id="ga" ${t.allDay ? "checked" : ""}> 終日</label>
+<div class="row" id="gtime"><label>はじまり<input id="gs" type="time" step="300" value="${esc(t.start)}"></label><label>おわり<input id="ge" type="time" step="300" value="${esc(t.end)}"></label></div>
+<p class="small" id="gth">時間を入れなければ「終日」になります。</p>
+${child ? "" : `<div class="lbl">見せる相手</div>
+<div class="seg" id="gv">${Object.entries(VIS).map(([k, x]) => `<button type="button" data-v="${k}" class="${(t.vis || "all") === k ? "on" : ""}">${esc(k === "adults" ? adultsLabel() : x)}</button>`).join("")}</div>
+<div class="pick" id="gp" ${t.vis === "pick" ? "" : "hidden"}>${others.map(([id, m]) => `<label class="chk"><input type="checkbox" value="${id}" ${(t.picks || []).includes(id) ? "checked" : ""}><i class="dot" style="background:${m.color}"></i>${esc(m.name)}</label>`).join("")}<p class="small">あなたにはいつも見えます。</p></div>`}
+<p class="err" id="gx"></p>
+<div class="btns"><button type="button" class="sub" id="gc">やめる</button><button class="main" id="gok">保存</button></div>
+</form>`, () => {
+    let vis = child ? "all" : (t.vis || "all");
+    const timeOn = () => { $("gtime").hidden = $("ga").checked; $("gth").hidden = $("ga").checked; };
+    $("ga").onchange = timeOn; timeOn();
+    if (!child) $("gv").onclick = ev => {
+      const b = ev.target.closest("[data-v]"); if (!b) return;
+      vis = b.dataset.v;
+      $("gv").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      $("gp").hidden = vis !== "pick";
+    };
+    $("gc").onclick = showTags;
+    $("gf").onsubmit = async ev => {
+      ev.preventDefault();
+      const name = $("gn").value.trim();
+      const start = $("ga").checked ? "" : $("gs").value, end = $("ga").checked ? "" : $("ge").value;
+      const allDay = $("ga").checked || !start;
+      if (end && start && end < start) { $("gx").textContent = "おわりの時間が、はじまりより前です"; return; }
+      const picks = vis === "pick" ? [...$("gp").querySelectorAll("input:checked")].map(x => x.value) : [];
+      if (vis === "pick" && !picks.length) { $("gx").textContent = "見せる人を1人以上えらんでください(自分だけなら「自分だけ」)"; return; }
+      if (!name) { $("gx").textContent = "名前を入れてください"; return; }
+      const tag = { id: t.id || Math.random().toString(36).slice(2, 10), name, allDay, start: allDay ? "" : start, end: allDay ? "" : end, vis, picks };
+      const list = [...S.tags]; if (i >= 0) list[i] = tag; else list.push(tag);
+      $("gok").disabled = true;
+      try { await F.saveTags(S.me.mid, list); toast("保存しました"); setTimeout(showTags, 200); }
+      catch (x) { $("gx").textContent = errMsg(x); $("gok").disabled = false; }
+    };
   });
 }

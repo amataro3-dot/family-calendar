@@ -1,5 +1,5 @@
 rules_version = '2';
-// カレンダー(家族用)のルール v=4(Firebase → Firestore Database → ルール に貼って「公開」)
+// カレンダー(家族用)のルール v=6(Firebase → Firestore Database → ルール に貼って「公開」)
 // - config/family: 家族の名前・大人/子ども・色。メンバーだけ読める。最初の1回だけ、作った人がホストになる
 // - config/public: { ready }。家族がもうあるか。だれでも読める
 // - users/{uid}:   ログインした人 → 家族の番号(mid)。自分のだけ読める
@@ -8,6 +8,7 @@ rules_version = '2';
 // - links/{mid}:   家族の番号 → アカウント。ホストだけ読める
 // - open/{mid}:    まだ登録していない人の名前。だれでも読める(ログイン画面の「はじめて使う人」)
 //                  その人が自分で登録すると消える(自分の名前のぶんだけ登録できる)
+// - tags/{mid}:    その人のタグ(バイト・塾など)。本人だけ読み書き
 // - events/{id}:   予定。viewers(見せる人の番号)に自分がいる予定だけ読める。直す・消すは書いた本人だけ
 //                  子どもの予定は、家族全員に見せないと書けない
 service cloud.firestore {
@@ -87,6 +88,14 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isHost() && request.resource.data.keys().hasOnly(['name']);
       allow delete: if isHost() || isClaimer(mid);
+    }
+
+    // タグ(v=6〜): 一人ひとり別々。本人だけ読み書き
+    match /tags/{mid} {
+      allow read: if isMember() && me().mid == mid;
+      allow write: if isMember() && me().mid == mid
+        && (request.resource == null || (request.resource.data.keys().hasOnly(['list'])
+            && request.resource.data.list is list && request.resource.data.list.size() <= 30));
     }
 
     match /events/{id} {

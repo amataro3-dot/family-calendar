@@ -102,3 +102,8 @@ a{color:var(--ac)}
 .names{display:flex;flex-wrap:wrap;gap:8px}
 .names button{flex:1 1 30%;padding:12px 8px;font-weight:700}
 .fam .wait{font-style:normal;font-size:12px;color:#b26a00;background:#fff4e0;border-radius:6px;padding:0 6px;margin-left:6px}
+/* タグ(v=6) */
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin:0 2px 10px}
+.tag{font-size:14px;padding:7px 12px;border-radius:999px;background:#fff;border:1px solid var(--bd);display:flex;align-items:center;gap:6px;box-shadow:0 1px 2px #0001}
+.tag small{font-size:11px;color:var(--sub)}
+.tag.new{background:transparent;border-style:dashed;color:var(--ac);box-shadow:none}

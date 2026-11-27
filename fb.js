@@ -10,7 +10,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, collection, query, where, onSnapshot, writeBatch,
-  addDoc, updateDoc, deleteDoc, serverTimestamp, deleteField
+  addDoc, updateDoc, deleteDoc, serverTimestamp, deleteField, setDoc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const CONFIG = {
@@ -189,3 +189,9 @@ export function watchEvents(mid, cb, err) {
 export const addEvent = ev => addDoc(collection(db, "events"), { ...ev, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
 export const saveEvent = (id, ev) => updateDoc(doc(db, "events", id), { ...ev, updatedAt: serverTimestamp() });
 export const removeEvent = id => deleteDoc(doc(db, "events", id));
+
+/* ---------- タグ(v=6〜。一人ひとり別々。tags/{mid} = { list: [{ id, name, allDay, start, end, vis, picks }] }。本人だけ読み書き) ---------- */
+export function watchTags(mid, cb) {
+  return onSnapshot(doc(db, "tags", mid), s => cb(s.exists() ? (s.data().list || []) : []), () => cb([]));
+}
+export const saveTags = (mid, list) => setDoc(doc(db, "tags", mid), { list });
